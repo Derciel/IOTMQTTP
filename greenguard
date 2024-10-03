@@ -1,0 +1,93 @@
+import network
+import time
+from umqtt.simple import MQTTClient
+from machine import Pin
+import dht
+import ujson
+
+# Configurações MQTT
+mqtt_server = "mqtt-dashboard.com"
+mqtt_port = 1883
+mqtt_user = ""
+mqtt_password = ""
+mqtt_client_id = "clientId"
+topic_sub = "greenguard/controle"
+topic_pub_temp = "greenguard/temperatura_umidade"
+
+# Configuração dos pinos
+LED = Pin(5, Pin.OUT)  # LED no pino 5
+sensor = dht.DHT22(Pin(15))  # Sensor DHT22 no pino 15
+
+# Função para conectar ao WiFi
+def conecta_wifi():
+    print("Conectando ao WiFi", end="")
+    sta_if = network.WLAN(network.STA_IF)
+    sta_if.active(True)
+    sta_if.connect('Wokwi-GUEST', '')  # Rede padrão do WokWi
+    while not sta_if.isconnected():
+        print(".", end="")
+        time.sleep(0.5)
+    print("\nConectado ao WiFi!")
+    return sta_if
+
+# Função de callback para quando uma mensagem MQTT for recebida
+def recebi(topico, msg):
+    print(f"Mensagem recebida: Tópico={topico.decode()} Mensagem={msg.decode()}")
+    comando = msg.decode().upper()
+    if comando == "LIGA":
+        LED.on()
+        print("LED ligado.")
+    elif comando == "DESLIGA":
+        LED.off()
+        print("LED desligado.")
+    elif comando == "PISCAR":
+        piscar_led = True
+        print("LED piscando.")
+
+# Função para conectar ao broker MQTT
+def conecta_mqtt():
+    client = MQTTClient(mqtt_client_id, mqtt_server, mqtt_port, mqtt_user, mqtt_password)
+    client.set_callback(recebi)
+    while True:
+        try:
+            client.connect()
+            client.subscribe(topic_sub)
+            print(f"Conectado ao Broker MQTT e inscrito no tópico: {topic_sub}")
+            break
+        except Exception as e:
+            print(f"Erro ao conectar ao Broker MQTT: {e}. Tentando novamente em 5 segundos...")
+            time.sleep(5)
+    return client
+
+# Conectar ao WiFi
+sta_if = conecta_wifi()
+
+# Conectar ao Broker MQTT
+client = conecta_mqtt()
+
+# Loop principal
+while True:
+    try:
+        # Leitura do sensor de temperatura e umidade
+        sensor.measure()
+        temperatura = sensor.temperature()
+        umidade = sensor.humidity()
+        
+        # Publicar os dados no tópico MQTT em formato JSON
+        dados = {
+            temperatura: "",
+            umidade: "",
+        }
+
+        client.publish(topic_pub_temp, ujson.dumps(dados))
+        print(f"Dados publicados: {dados}")
+        
+        # Verifica se há mensagens recebidas para controle do LED
+        client.check_msg()
+        
+        # Aguardar um pouco antes de repetir
+        time.sleep(10)
+    except OSError as e:
+        print(f"Erro: {e}, tentando reconectar...")
+        sta_if = conecta_wifi()
+        client = conecta_mqtt()
